@@ -32,7 +32,7 @@ if (fs.existsSync(envPath)) {
 // 소넷 Latest - 1 단일 모델 화이트리스트 정책 (비용 보호를 위해 고가 모델 원천 차단)
 const ALLOWED_MODELS = ["claude-sonnet-4-6"];
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const TIMEOUT_MS = 35000; // LLM 심층 분석을 위한 35초 현실화 타임아웃
+const TIMEOUT_MS = 120000; // LLM 심층 분석을 위한 120초 상한선 타임아웃
 
 // API 키 사전 유효성 검증
 const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -110,7 +110,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// 2. 도구 실행 핸들러 (CallTool) - 35초 이중 강제 타임아웃 방어벽 탑재
+// 2. 도구 실행 핸들러 (CallTool) - 120초 이중 강제 타임아웃 방어벽 탑재
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "consult_claude_architect") {
     const args = request.params.arguments || {};
@@ -143,14 +143,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    // 런타임 레벨 AbortController 및 35초 이중 타임아웃 레이스 방어벽 구축
+    // 런타임 레벨 AbortController 및 120초 이중 타임아웃 레이스 방어벽 구축
     const abortController = new AbortController();
     let timeoutId = null;
 
     const timeoutPromise = new Promise((_, reject) => {
       timeoutId = setTimeout(() => {
         abortController.abort();
-        reject(new Error("[타임아웃] 35초 초과로 요청이 취소되었습니다."));
+        reject(new Error("[타임아웃] 120초 초과로 요청이 취소되었습니다."));
       }, TIMEOUT_MS);
     });
 
@@ -172,7 +172,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       );
 
-      // Promise.race를 통한 35초 강제 레이스 실행
+      // Promise.race를 통한 120초 강제 레이스 실행
       const response = await Promise.race([apiCallPromise, timeoutPromise]);
 
       // 다중 텍스트 블록 안전 결합
