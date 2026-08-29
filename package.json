@@ -1,0 +1,22 @@
+{
+  "name": "mcp-together",
+  "version": "1.0.0",
+  "description": "Antigravity와 소넷 Latest - 1 모델 협업을 위한 로컬 Stdio MCP 서버",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.6.0"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "antigravity",
+    "sonnet"
+  ],
+  "author": "",
+  "license": "ISC"
+}
