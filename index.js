@@ -19,6 +19,8 @@ if (fs.existsSync(envPath)) {
       // 따옴표 제거 및 인라인 주석 분리
       if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
         val = val.slice(1, -1);
+      } else if (val.includes("#")) {
+        val = val.split("#")[0].trim();
       }
       if (key && val && !process.env[key.trim()]) {
         process.env[key.trim()] = val;
@@ -39,10 +41,10 @@ if (!apiKey || apiKey.trim() === "") {
   process.exit(1);
 }
 
-// Anthropic 클라이언트 초기화 (35초 타임아웃 방어벽)
+// Anthropic 클라이언트 초기화 (AbortController 주 경로 확정을 위해 SDK 레벨은 40초 완충)
 const anthropic = new Anthropic({
   apiKey: apiKey.trim(),
-  timeout: TIMEOUT_MS,
+  timeout: TIMEOUT_MS + 5000,
 });
 
 // MCP Stdio 서버 인스턴스 생성
