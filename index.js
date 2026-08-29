@@ -15,7 +15,11 @@ if (fs.existsSync(envPath)) {
     const trimmed = line.trim();
     if (trimmed && !trimmed.startsWith("#") && trimmed.includes("=")) {
       const [key, ...values] = trimmed.split("=");
-      const val = values.join("=").trim();
+      let val = values.join("=").trim();
+      // 따옴표 제거 및 인라인 주석 분리
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
       if (key && val && !process.env[key.trim()]) {
         process.env[key.trim()] = val;
       }
@@ -26,7 +30,7 @@ if (fs.existsSync(envPath)) {
 // 소넷 Latest - 1 단일 모델 화이트리스트 정책 (비용 보호를 위해 고가 모델 원천 차단)
 const ALLOWED_MODELS = ["claude-sonnet-4-6"];
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const TIMEOUT_MS = 20000; // 최대 20초 타임아웃 강제
+const TIMEOUT_MS = 35000; // LLM 심층 분석을 위한 35초 현실화 타임아웃
 
 // API 키 사전 유효성 검증
 const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -35,7 +39,7 @@ if (!apiKey || apiKey.trim() === "") {
   process.exit(1);
 }
 
-// Anthropic 클라이언트 초기화 (20초 타임아웃 방어벽)
+// Anthropic 클라이언트 초기화 (35초 타임아웃 방어벽)
 const anthropic = new Anthropic({
   apiKey: apiKey.trim(),
   timeout: TIMEOUT_MS,
@@ -104,7 +108,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// 2. 도구 실행 핸들러 (CallTool) - 20초 이중 강제 타임아웃 방어벽 탑재
+// 2. 도구 실행 핸들러 (CallTool) - 35초 이중 강제 타임아웃 방어벽 탑재
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "consult_claude_architect") {
     const args = request.params.arguments || {};
@@ -129,18 +133,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // 허용 모델 검증 및 고가 모델 방어 (소넷 Latest - 1 강제 고정)
     let targetModel = DEFAULT_MODEL;
-    if (requestedModel && !ALLOWED_MODELS.includes(requestedModel)) {
-      console.warn(`[비용 보호 경고] 비허용 모델(${requestedModel}) 요청 감지 -> 소넷 Latest - 1(${DEFAULT_MODEL})로 자동 대체.`);
+    if (requestedModel) {
+      if (ALLOWED_MODELS.includes(requestedModel)) {
+        targetModel = requestedModel;
+      } else {
+        console.warn(`[비용 보호 경고] 비허용 모델(${requestedModel}) 요청 감지 -> 소넷 Latest - 1(${DEFAULT_MODEL})로 자동 대체.`);
+      }
     }
 
-    // 런타임 레벨 AbortController 및 20초 이중 타임아웃 레이스 방어벽 구축
+    // 런타임 레벨 AbortController 및 35초 이중 타임아웃 레이스 방어벽 구축
     const abortController = new AbortController();
     let timeoutId = null;
 
     const timeoutPromise = new Promise((_, reject) => {
       timeoutId = setTimeout(() => {
         abortController.abort();
-        reject(new Error("[타임아웃] 20초 초과로 요청이 취소되었습니다."));
+        reject(new Error("[타임아웃] 35초 초과로 요청이 취소되었습니다."));
       }, TIMEOUT_MS);
     });
 
@@ -162,12 +170,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       );
 
-      // Promise.race를 통한 20초 강제 레이스 실행
+      // Promise.race를 통한 35초 강제 레이스 실행
       const response = await Promise.race([apiCallPromise, timeoutPromise]);
 
+      // 다중 텍스트 블록 안전 결합
+      const textBlocks = response.content?.filter((b) => b.type === "text") || [];
       const responseText =
-        response.content && response.content[0] && response.content[0].type === "text"
-          ? response.content[0].text
+        textBlocks.length > 0
+          ? textBlocks.map((b) => b.text).join("\n")
           : "응답 텍스트를 추출할 수 없습니다.";
 
       return {
