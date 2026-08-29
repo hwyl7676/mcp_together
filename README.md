@@ -1,13 +1,14 @@
 # Antigravity + 소넷 Latest - 1 MCP 협업 서버
 
-Antigravity의 빠른 에디터 코딩과 **소넷 Latest - 1(최신 직전 안정화 모델)**의 정밀 검수를 결합한 로컬 Stdio MCP 서버입니다.
+Antigravity의 빠른 에디터 코딩과 **소넷 Latest - 1(최신 직전 안정화 모델: claude-sonnet-4-6)**의 정밀 검수를 결합한 로컬 Stdio MCP 서버입니다.
 
 ## 1. 운영 원칙
 
 1. **평소 코딩**: Antigravity와 무료/상시로 빠르게 코딩을 진행합니다.
-2. **독립 리뷰 요청**: 사용자가 "소넷으로 리뷰해줘"라고 지시할 때만 소넷 Latest - 1(`claude-3-5-sonnet-20241022`)을 호출합니다.
+2. **독립 리뷰 요청**: 사용자가 "소넷으로 리뷰해줘"라고 지시할 때만 소넷 Latest - 1(`claude-sonnet-4-6`)을 호출합니다.
 3. **2차 검수 및 안전 반영**: 소넷이 반환한 수정 코드를 Antigravity가 [로컬 호환성 교정 ➡️ 과잉 엔지니어링 쳐내기 ➡️ 누락 방지 안전 병합] 후 에디터 파일에 반영합니다.
 4. **비용 보호**: 오퍼스 및 5시리즈 등 고비용 모델을 원천 차단하여 1회당 약 35~80원 선으로 비용을 엄격히 통제합니다.
+5. **20초 타임아웃 방어**: `AbortController` 및 `Promise.race` 기반으로 20초 초과 시 즉각 안전 취소 처리합니다.
 
 ## 2. 의존성 설치
 
@@ -18,24 +19,12 @@ cd /Users/taehwankim/Desktop/Antigravity_Projects/mcp_together
 npm install
 ```
 
-## 3. Antigravity MCP 설정 등록
+## 3. 환경 변수 설정
 
-Antigravity의 MCP 설정 파일에 아래 내용을 등록하고 `ANTHROPIC_API_KEY`에 실제 발급받은 키를 입력합니다:
+`.env` 파일에 발급받은 Anthropic API 키를 설정합니다:
 
-```json
-{
-  "mcpServers": {
-    "claude-architect": {
-      "command": "node",
-      "args": [
-        "/Users/taehwankim/Desktop/Antigravity_Projects/mcp_together/index.js"
-      ],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-api03-실제키입력"
-      }
-    }
-  }
-}
+```env
+ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
 ## 4. 실전 사용 지시

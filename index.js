@@ -4,9 +4,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-// .env 파일이 존재하는 경우 환경변수 보충 로드
-const envPath = path.resolve(process.cwd(), ".env");
+// index.js 위치 기준 .env 파일 보충 로드 (CWD와 무관하게 안정적 로딩)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = path.resolve(__dirname, ".env");
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, "utf-8");
   for (const line of envContent.split("\n")) {
@@ -22,8 +24,8 @@ if (fs.existsSync(envPath)) {
 }
 
 // 소넷 Latest - 1 단일 모델 화이트리스트 정책 (비용 보호를 위해 고가 모델 원천 차단)
-const ALLOWED_MODELS = ["claude-3-5-sonnet-20241022"];
-const DEFAULT_MODEL = "claude-3-5-sonnet-20241022";
+const ALLOWED_MODELS = ["claude-sonnet-4-6"];
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const TIMEOUT_MS = 20000; // 최대 20초 타임아웃 강제
 
 // API 키 사전 유효성 검증
@@ -91,7 +93,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             model: {
               type: "string",
-              description: "호출할 모델 (소넷 Latest - 1 고정: claude-3-5-sonnet-20241022)",
+              description: "호출할 모델 (소넷 Latest - 1 고정: claude-sonnet-4-6)",
               enum: ALLOWED_MODELS,
             },
           },
