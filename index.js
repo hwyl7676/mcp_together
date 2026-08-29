@@ -2,10 +2,29 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import Anthropic from "@anthropic-ai/sdk";
+import fs from "node:fs";
+import path from "node:path";
+
+// .env 파일이 존재하는 경우 환경변수 보충 로드
+const envPath = path.resolve(process.cwd(), ".env");
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, "utf-8");
+  for (const line of envContent.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#") && trimmed.includes("=")) {
+      const [key, ...values] = trimmed.split("=");
+      const val = values.join("=").trim();
+      if (key && val && !process.env[key.trim()]) {
+        process.env[key.trim()] = val;
+      }
+    }
+  }
+}
 
 // 소넷 Latest - 1 단일 모델 화이트리스트 정책 (비용 보호를 위해 고가 모델 원천 차단)
 const ALLOWED_MODELS = ["claude-3-5-sonnet-20241022"];
 const DEFAULT_MODEL = "claude-3-5-sonnet-20241022";
+const TIMEOUT_MS = 20000; // 최대 20초 타임아웃 강제
 
 // API 키 사전 유효성 검증
 const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -14,10 +33,10 @@ if (!apiKey || apiKey.trim() === "") {
   process.exit(1);
 }
 
-// Anthropic 클라이언트 초기화 (30초 타임아웃 방어벽)
+// Anthropic 클라이언트 초기화 (20초 타임아웃 방어벽)
 const anthropic = new Anthropic({
   apiKey: apiKey.trim(),
-  timeout: 30000,
+  timeout: TIMEOUT_MS,
 });
 
 // MCP Stdio 서버 인스턴스 생성
@@ -83,7 +102,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// 2. 도구 실행 핸들러 (CallTool)
+// 2. 도구 실행 핸들러 (CallTool) - 20초 이중 강제 타임아웃 방어벽 탑재
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "consult_claude_architect") {
     const args = request.params.arguments || {};
@@ -91,7 +110,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const contextCode = args.context_code;
     const requestedModel = args.model;
 
-    // 입력값 무결성 검증
+    // 입력값 무결성 사전 검증
     if (!taskSummary || typeof taskSummary !== "string" || taskSummary.trim() === "") {
       return {
         isError: true,
@@ -112,18 +131,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       console.warn(`[비용 보호 경고] 비허용 모델(${requestedModel}) 요청 감지 -> 소넷 Latest - 1(${DEFAULT_MODEL})로 자동 대체.`);
     }
 
+    // 런타임 레벨 AbortController 및 20초 이중 타임아웃 레이스 방어벽 구축
+    const abortController = new AbortController();
+    let timeoutId = null;
+
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        abortController.abort();
+        reject(new Error("[타임아웃] 20초 초과로 요청이 취소되었습니다."));
+      }, TIMEOUT_MS);
+    });
+
     try {
-      const response = await anthropic.messages.create({
-        model: targetModel,
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT.trim(),
-        messages: [
-          {
-            role: "user",
-            content: `[문제 요약]\n${taskSummary.trim()}\n\n[대상 코드 및 컨텍스트]\n${contextCode.trim()}`,
-          },
-        ],
-      });
+      const apiCallPromise = anthropic.messages.create(
+        {
+          model: targetModel,
+          max_tokens: 4096,
+          system: SYSTEM_PROMPT.trim(),
+          messages: [
+            {
+              role: "user",
+              content: `[문제 요약]\n${taskSummary.trim()}\n\n[대상 코드 및 컨텍스트]\n${contextCode.trim()}`,
+            },
+          ],
+        },
+        {
+          signal: abortController.signal,
+        }
+      );
+
+      // Promise.race를 통한 20초 강제 레이스 실행
+      const response = await Promise.race([apiCallPromise, timeoutPromise]);
 
       const responseText =
         response.content && response.content[0] && response.content[0].type === "text"
@@ -140,16 +178,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[Claude API 호출 오류] ${errorMessage}`);
+      console.error(`[Claude API 호출/타임아웃 오류] ${errorMessage}`);
       return {
         isError: true,
         content: [
           {
             type: "text",
-            text: `Claude API 호출 실패: ${errorMessage}`,
+            text: errorMessage.includes("[타임아웃]")
+              ? errorMessage
+              : `Claude API 호출 실패: ${errorMessage}`,
           },
         ],
       };
+    } finally {
+      // 타이머 자원 누수 방지
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 
