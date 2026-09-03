@@ -7,28 +7,33 @@ Antigravity - Claude Architect MCP Server (Python Edition)
 import sys
 import os
 import json
+import socket
 import urllib.request
 import urllib.error
+from typing import Dict, Any, Optional
+
+# OS/소켓 레벨 전역 타임아웃 강제 (120초 초과 시 소켓 강제 차단)
+TIMEOUT_SECONDS: float = 120.0
+socket.setdefaulttimeout(TIMEOUT_SECONDS)
 
 # 1. .env 파일 로드
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-env_file = os.path.join(CURRENT_DIR, ".env")
+CURRENT_DIR: str = os.path.dirname(os.path.abspath(__file__))
+env_file: str = os.path.join(CURRENT_DIR, ".env")
 if os.path.exists(env_file):
     with open(env_file, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                val = val.strip().strip("'\"")
-                if key and val and key not in os.environ:
-                    os.environ[key] = val
+            line_str = line.strip()
+            if line_str and not line_str.startswith("#") and "=" in line_str:
+                key, val = line_str.split("=", 1)
+                key_clean = key.strip()
+                val_clean = val.strip().strip("'\"")
+                if key_clean and val_clean and key_clean not in os.environ:
+                    os.environ[key_clean] = val_clean
 
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-DEFAULT_MODEL = "claude-sonnet-4-6"
-TIMEOUT_SECONDS = 120
+API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+DEFAULT_MODEL: str = "claude-sonnet-4-6"
 
-SYSTEM_PROMPT = """당신은 최고 수준의 소프트웨어 수석 아키텍트입니다.
+SYSTEM_PROMPT: str = """당신은 최고 수준의 소프트웨어 수석 아키텍트입니다.
 Antigravity로부터 전달받은 코드와 문제 요약을 분석하고 리팩토링할 때, 반드시 아래 3대 검증 기준을 엄격히 적용하여 최적의 코드를 작성하세요.
 
 1. 프레임워크 / OS 버전 호환성
@@ -44,23 +49,25 @@ Antigravity로부터 전달받은 코드와 문제 요약을 분석하고 리팩
    - 메모리 누수(Retain cycle), 동시성 충돌(Race condition/Deadlock), 네트워크 예외 핸들링을 철저히 구현할 것.
 """
 
-def call_anthropic(task_summary: str, context_code: str, model: str = DEFAULT_MODEL) -> str:
+def call_anthropic(task_summary: str, context_code: str, model: Optional[str] = None) -> str:
+    if not task_summary or not task_summary.strip():
+        raise ValueError("task_summary 입력값이 비어 있습니다.")
     if not API_KEY:
         raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
 
-    url = "https://api.anthropic.com/v1/messages"
-    headers = {
+    url: str = "https://api.anthropic.com/v1/messages"
+    headers: Dict[str, str] = {
         "x-api-key": API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
     }
 
-    user_content = f"### 해결 과제 요약:\n{task_summary}\n\n"
-    if context_code:
-        user_content += f"### 대상 소스코드 및 컨텍스트:\n```\n{context_code}\n```"
+    user_content: str = f"### 해결 과제 요약:\n{task_summary.strip()}\n\n"
+    if context_code and context_code.strip():
+        user_content += f"### 대상 소스코드 및 컨텍스트:\n```\n{context_code.strip()}\n```"
 
-    payload = {
-        "model": model or DEFAULT_MODEL,
+    payload: Dict[str, Any] = {
+        "model": model.strip() if (model and model.strip()) else DEFAULT_MODEL,
         "max_tokens": 4096,
         "system": SYSTEM_PROMPT,
         "messages": [
@@ -77,18 +84,20 @@ def call_anthropic(task_summary: str, context_code: str, model: str = DEFAULT_MO
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Anthropic API 오류 ({e.code}): {error_body}")
+    except socket.timeout:
+        raise TimeoutError(f"Anthropic API 호출 중 120초 타임아웃이 발생했습니다.")
     except Exception as e:
         raise RuntimeError(f"Claude 호출 중 에러 발생: {str(e)}")
 
-def send_response(response_dict):
-    json_str = json.dumps(response_dict, ensure_ascii=False)
+def send_response(response_dict: Dict[str, Any]) -> None:
+    json_str: str = json.dumps(response_dict, ensure_ascii=False)
     sys.stdout.write(json_str + "\n")
     sys.stdout.flush()
 
-def handle_message(msg):
-    msg_id = msg.get("id")
-    method = msg.get("method")
-    params = msg.get("params", {})
+def handle_message(msg: Dict[str, Any]) -> None:
+    msg_id: Optional[Any] = msg.get("id")
+    method: Optional[str] = msg.get("method")
+    params: Dict[str, Any] = msg.get("params", {})
 
     if method == "initialize":
         send_response({
@@ -106,7 +115,7 @@ def handle_message(msg):
             }
         })
     elif method == "notifications/initialized":
-        # Notification, no response
+        # Notification, no response needed
         pass
     elif method == "ping":
         send_response({
@@ -147,14 +156,14 @@ def handle_message(msg):
             }
         })
     elif method == "tools/call":
-        tool_name = params.get("name")
-        tool_args = params.get("arguments", {})
+        tool_name: Optional[str] = params.get("name")
+        tool_args: Dict[str, Any] = params.get("arguments", {})
         if tool_name == "consult_claude_architect":
-            task_summary = tool_args.get("task_summary", "")
-            context_code = tool_args.get("context_code", "")
-            model = tool_args.get("model", DEFAULT_MODEL)
+            task_summary: str = str(tool_args.get("task_summary", "") or "")
+            context_code: str = str(tool_args.get("context_code", "") or "")
+            model: str = str(tool_args.get("model", DEFAULT_MODEL) or DEFAULT_MODEL)
             try:
-                result_text = call_anthropic(task_summary, context_code, model)
+                result_text: str = call_anthropic(task_summary, context_code, model)
                 send_response({
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -202,18 +211,18 @@ def handle_message(msg):
                 }
             })
 
-def main():
+def main() -> None:
     sys.stderr.write("[MCP Sonnet Server] Started successfully (120s timeout).\n")
     sys.stderr.flush()
     while True:
-        line = sys.stdin.readline()
+        line: str = sys.stdin.readline()
         if not line:
             break
-        line = line.strip()
-        if not line:
+        line_clean: str = line.strip()
+        if not line_clean:
             continue
         try:
-            msg = json.loads(line)
+            msg: Dict[str, Any] = json.loads(line_clean)
             handle_message(msg)
         except Exception as e:
             sys.stderr.write(f"[MCP Sonnet Server Error] {e}\n")
