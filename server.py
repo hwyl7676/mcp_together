@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Antigravity - Claude Architect MCP Server (Python Edition)
-소넷(claude-sonnet-4-6) 협업을 위한 로컬 Stdio MCP 서버 (타임아웃 120초)
+소넷(claude-sonnet-4-6) 협업을 위한 로컬 Stdio MCP 서버 (타임아웃 120초, 실시간 진행 로깅)
 """
 
 import sys
@@ -15,6 +15,11 @@ from typing import Dict, Any, Optional
 # OS/소켓 레벨 전역 타임아웃 강제 (120초 초과 시 소켓 강제 차단)
 TIMEOUT_SECONDS: float = 120.0
 socket.setdefaulttimeout(TIMEOUT_SECONDS)
+
+def log_progress(message: str) -> None:
+    """표준 에러(stderr)로 즉각적인 실시간 진행 로그를 버퍼링 없이 출력합니다."""
+    sys.stderr.write(f"[MCP Sonnet] {message}\n")
+    sys.stderr.flush()
 
 # 1. .env 파일 로드
 CURRENT_DIR: str = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +60,7 @@ def call_anthropic(task_summary: str, context_code: str, model: Optional[str] = 
     if not API_KEY:
         raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
 
+    target_model: str = model.strip() if (model and model.strip()) else DEFAULT_MODEL
     url: str = "https://api.anthropic.com/v1/messages"
     headers: Dict[str, str] = {
         "x-api-key": API_KEY,
@@ -67,7 +73,7 @@ def call_anthropic(task_summary: str, context_code: str, model: Optional[str] = 
         user_content += f"### 대상 소스코드 및 컨텍스트:\n```\n{context_code.strip()}\n```"
 
     payload: Dict[str, Any] = {
-        "model": model.strip() if (model and model.strip()) else DEFAULT_MODEL,
+        "model": target_model,
         "max_tokens": 4096,
         "system": SYSTEM_PROMPT,
         "messages": [
@@ -75,18 +81,26 @@ def call_anthropic(task_summary: str, context_code: str, model: Optional[str] = 
         ]
     }
 
+    log_progress(f"Anthropic API 호출 시작 (모델: {target_model}, 상한선 타임아웃: {TIMEOUT_SECONDS}초)")
+    log_progress(f"과제 요약: {task_summary.strip()[:60]}... (컨텍스트 코드 크기: {len(context_code)}자)")
+
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             text_blocks = [block["text"] for block in data.get("content", []) if block.get("type") == "text"]
-            return "\n".join(text_blocks)
+            result_str = "\n".join(text_blocks)
+            log_progress(f"Anthropic API 응답 수신 완료 (결과 텍스트 크기: {len(result_str)}자)")
+            return result_str
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
+        log_progress(f"Anthropic API HTTP 에러 발생 ({e.code}): {error_body}")
         raise RuntimeError(f"Anthropic API 오류 ({e.code}): {error_body}")
     except socket.timeout:
-        raise TimeoutError(f"Anthropic API 호출 중 120초 타임아웃이 발생했습니다.")
+        log_progress(f"[타임아웃] Anthropic API 호출 중 {TIMEOUT_SECONDS}초 초과로 강제 차단되었습니다.")
+        raise TimeoutError(f"Anthropic API 호출 중 {TIMEOUT_SECONDS}초 타임아웃이 발생했습니다.")
     except Exception as e:
+        log_progress(f"Anthropic API 통신 예외 발생: {str(e)}")
         raise RuntimeError(f"Claude 호출 중 에러 발생: {str(e)}")
 
 def send_response(response_dict: Dict[str, Any]) -> None:
@@ -99,7 +113,10 @@ def handle_message(msg: Dict[str, Any]) -> None:
     method: Optional[str] = msg.get("method")
     params: Dict[str, Any] = msg.get("params", {})
 
+    log_progress(f"JSON-RPC 요청 수신 (Method: {method}, ID: {msg_id})")
+
     if method == "initialize":
+        log_progress("초기화(initialize) 핸드셰이크 응답 전송")
         send_response({
             "jsonrpc": "2.0",
             "id": msg_id,
@@ -115,8 +132,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
             }
         })
     elif method == "notifications/initialized":
-        # Notification, no response needed
-        pass
+        log_progress("초기화 완료 알림(notifications/initialized) 수신")
     elif method == "ping":
         send_response({
             "jsonrpc": "2.0",
@@ -124,6 +140,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
             "result": {}
         })
     elif method == "tools/list":
+        log_progress("도구 목록(tools/list) 조회 응답 전송")
         send_response({
             "jsonrpc": "2.0",
             "id": msg_id,
@@ -158,12 +175,14 @@ def handle_message(msg: Dict[str, Any]) -> None:
     elif method == "tools/call":
         tool_name: Optional[str] = params.get("name")
         tool_args: Dict[str, Any] = params.get("arguments", {})
+        log_progress(f"도구 실행(tools/call) 요청: {tool_name}")
         if tool_name == "consult_claude_architect":
             task_summary: str = str(tool_args.get("task_summary", "") or "")
             context_code: str = str(tool_args.get("context_code", "") or "")
             model: str = str(tool_args.get("model", DEFAULT_MODEL) or DEFAULT_MODEL)
             try:
                 result_text: str = call_anthropic(task_summary, context_code, model)
+                log_progress(f"도구 실행 성공 응답 반환 완료 (ID: {msg_id})")
                 send_response({
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -178,6 +197,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
                     }
                 })
             except Exception as e:
+                log_progress(f"도구 실행 중 에러 응답 반환 (ID: {msg_id}): {str(e)}")
                 send_response({
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -192,6 +212,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
                     }
                 })
         else:
+            log_progress(f"알 수 없는 도구 호출: {tool_name}")
             send_response({
                 "jsonrpc": "2.0",
                 "id": msg_id,
@@ -202,6 +223,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
             })
     else:
         if msg_id is not None:
+            log_progress(f"알 수 없는 메서드 요청: {method}")
             send_response({
                 "jsonrpc": "2.0",
                 "id": msg_id,
@@ -212,8 +234,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
             })
 
 def main() -> None:
-    sys.stderr.write("[MCP Sonnet Server] Started successfully (120s timeout).\n")
-    sys.stderr.flush()
+    log_progress(f"서버가 정상 구동되었습니다. (타임아웃 상한선: {TIMEOUT_SECONDS}초, 무버퍼링 로깅 활성화)")
     while True:
         line: str = sys.stdin.readline()
         if not line:
@@ -225,8 +246,7 @@ def main() -> None:
             msg: Dict[str, Any] = json.loads(line_clean)
             handle_message(msg)
         except Exception as e:
-            sys.stderr.write(f"[MCP Sonnet Server Error] {e}\n")
-            sys.stderr.flush()
+            log_progress(f"메시지 파싱/처리 중 에러 발생: {e}")
 
 if __name__ == "__main__":
     main()
