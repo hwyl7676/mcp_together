@@ -24,34 +24,9 @@ if os.path.exists(env_file):
                 if key and val and key not in os.environ:
                     os.environ[key] = val
 
-API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-DEFAULT_MODEL: str = os.environ.get("ANTHROPIC_DEFAULT_MODEL", "claude-sonnet-5").strip()
-TIMEOUT_SECONDS: int = 120
-
-MODEL_ALIASES: dict[str, str] = {
-    "sonnet": "claude-sonnet-5",
-    "sonnet5": "claude-sonnet-5",
-    "claude-sonnet": "claude-sonnet-5",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "opus": "claude-opus-5",
-    "opus5": "claude-opus-5",
-    "claude-opus": "claude-opus-5",
-    "claude-opus-5": "claude-opus-5",
-    "fable": "claude-fable-5-1",
-    "fable5": "claude-fable-5-1",
-    "claude-fable": "claude-fable-5-1",
-    "claude-fable-5-1": "claude-fable-5-1",
-    "haiku": "claude-haiku-4-5",
-    "haiku4": "claude-haiku-4-5",
-    "claude-haiku": "claude-haiku-4-5",
-    "claude-haiku-4-5": "claude-haiku-4-5",
-}
-
-def resolve_model(model_name: str) -> str:
-    if not model_name or not model_name.strip():
-        return DEFAULT_MODEL
-    cleaned: str = model_name.strip().lower()
-    return MODEL_ALIASES.get(cleaned, model_name.strip())
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+DEFAULT_MODEL = "claude-sonnet-4-6"
+TIMEOUT_SECONDS = 120
 
 SYSTEM_PROMPT = """당신은 최고 수준의 소프트웨어 수석 아키텍트입니다.
 Antigravity로부터 전달받은 코드와 문제 요약을 분석하고 리팩토링할 때, 반드시 아래 3대 검증 기준을 엄격히 적용하여 최적의 코드를 작성하세요.
@@ -84,9 +59,8 @@ def call_anthropic(task_summary: str, context_code: str, model: str = DEFAULT_MO
     if context_code:
         user_content += f"### 대상 소스코드 및 컨텍스트:\n```\n{context_code}\n```"
 
-    target_model = resolve_model(model)
     payload = {
-        "model": target_model,
+        "model": model or DEFAULT_MODEL,
         "max_tokens": 4096,
         "system": SYSTEM_PROMPT,
         "messages": [
